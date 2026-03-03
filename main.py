@@ -209,6 +209,39 @@ class App(tk.Tk):
         self._out.config(state=tk.DISABLED)
         self._out.see(tk.END)
 
+    def _fmt_won(self, val: float) -> str:
+        return f"{val:,.0f}원" if val else "미확인"
+
+    def _write_bid_row(self, r: dict, color_tag: str):
+        """공고 1건 출력 (특이/일반 공통)."""
+        pdf_note = f"  (PDF {r['pdf_count']}건 분석)" if r["pdf_count"] else ""
+        tags_str = "  ".join(f"[{t}]" for t in r["special_tags"])
+
+        self._write(f"  {r['bid_no']}  [{r['bid_type']}]  {r['institution']}\n", color_tag)
+        self._write(f"  {r['name']}\n", color_tag)
+
+        # 금액 정보
+        self._write(
+            f"  기초금액: {self._fmt_won(r['bssamt'])}"
+            f"   추정가격: {self._fmt_won(r['presmpt_prce'])}"
+            f"   낙찰하한율: {r['lwlt_rate']}%\n",
+            "amount"
+        )
+        a_str = self._fmt_won(r['a_value']) if r['a_value'] else "미해당/미공개"
+        self._write(
+            f"  A값: {a_str}"
+            f"   순공사원가: {self._fmt_won(r['pure_const_cost'])}\n",
+            "amount"
+        )
+        self._write(
+            f"  적격심사 기준: {r['qual_criteria']}{pdf_note}\n",
+            "amount"
+        )
+
+        if tags_str:
+            self._write(f"  {tags_str}\n", "tag")
+        self._write("\n")
+
     def _show_results(self, results: list):
         self._progress.stop()
         self._run_btn.config(state=tk.NORMAL)
@@ -224,34 +257,18 @@ class App(tk.Tk):
         # ── 특이 공고 ─────────────────────────────────────
         self._write(f"■ 특이 공고 ({len(specials)}건)\n", "h_special")
         self._write("─" * 60 + "\n")
-
         if specials:
             for r in specials:
-                amt = f"{r['amount']:,.0f}원" if r["amount"] else "금액 미확인"
-                pdf_note = f"  PDF {r['pdf_count']}건" if r["pdf_count"] else ""
-                tags_str = "  " + "  ".join(f"[{t}]" for t in r["special_tags"])
-
-                self._write(f"  {r['bid_no']}\n", "item_s")
-                self._write(f"  {r['name']}\n", "item_s")
-                self._write(f"  {r['institution']}\n", "item_s")
-                self._write(f"  금액: {amt}  ({r['amount_label']}){pdf_note}\n", "amount")
-                self._write(f"{tags_str}\n", "tag")
-                self._write("\n")
+                self._write_bid_row(r, "item_s")
         else:
             self._write("  (없음)\n\n")
 
         # ── 일반 공고 ─────────────────────────────────────
         self._write(f"■ 일반 공고 ({len(normals)}건)\n", "h_normal")
         self._write("─" * 60 + "\n")
-
         if normals:
             for r in normals:
-                amt = f"{r['amount']:,.0f}원" if r["amount"] else "금액 미확인"
-                self._write(f"  {r['bid_no']}\n", "item_n")
-                self._write(f"  {r['name']}\n", "item_n")
-                self._write(f"  {r['institution']}\n", "item_n")
-                self._write(f"  금액: {amt}  ({r['amount_label']})\n", "amount")
-                self._write("\n")
+                self._write_bid_row(r, "item_n")
         else:
             self._write("  (없음)\n\n")
 
