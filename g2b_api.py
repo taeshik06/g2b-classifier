@@ -6,32 +6,36 @@ import io
 import requests
 import fitz  # PyMuPDF
 
-G2B_BASE = "https://apis.data.go.kr/1230000/BidPublicInfoService"
+G2B_BASE = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
 
-# 입찰 유형별 상세 조회 엔드포인트 (용역 → 공사 → 물품 순서로 시도)
-DETAIL_ENDPOINTS = [
-    f"{G2B_BASE}/getBidPblancDetailInfoServc",       # 용역
-    f"{G2B_BASE}/getBidPblancDetailInfoCnstwkThg",   # 공사
-    f"{G2B_BASE}/getBidPblancDetailInfoThng",        # 물품/제조
+# 유형별 목록 엔드포인트 — bidNtceNo + inqryDiv=2 로 단건 조회
+LIST_ENDPOINTS = [
+    f"{G2B_BASE}/getBidPblancListInfoCnstwk",   # 공사
+    f"{G2B_BASE}/getBidPblancListInfoServc",    # 용역
+    f"{G2B_BASE}/getBidPblancListInfoThng",     # 물품/제조
+    f"{G2B_BASE}/getBidPblancListInfoFrgcpt",   # 외자
+    f"{G2B_BASE}/getBidPblancListInfoEtc",      # 기타
 ]
-
-FILE_ENDPOINT = f"{G2B_BASE}/getFileInfoBidPblancNotice"
 
 # API 응답에서 텍스트로 추출할 필드 목록
 TEXT_FIELDS = [
     "bidNtceNm",        # 공고명
-    "ntceSpecCntn",     # 공고 특기사항
+    "ntceSpecCntn",     # 공고 특기사항 (있을 경우)
     "ntceInsttNm",      # 공고기관명
     "dminsttNm",        # 수요기관명
-    "bidNtceDtlUrl",    # 상세 URL (참고용)
+    "cntrctCnclsMthdNm",  # 계약체결방법명
 ]
 
-# 금액 우선순위 필드
+# 금액 우선순위 필드 (API 실제 응답 기준)
 AMOUNT_FIELDS = [
-    "drwtPrceBsisAmt",  # 기초금액
-    "asignBdgtAmt",     # 배정예산액
-    "presmptPrce",      # 추정가격
+    "bdgtAmt",              # 예산금액
+    "presmptPrce",          # 추정가격
+    "asignBdgtAmt",         # 배정예산액
+    "drwtPrceBsisAmt",      # 기초금액
 ]
+
+# 첨부파일 URL/이름 필드 (ntceSpecDocUrl1~5, ntceSpecFileNm1~5)
+MAX_ATTACH = 5
 
 
 def _parse_bid_no(bid_no: str):
@@ -45,21 +49,21 @@ def _parse_bid_no(bid_no: str):
 
 def get_bid_detail(api_key: str, bid_no: str) -> dict:
     """
-    여러 엔드포인트를 순서대로 시도해 공고 상세 정보 반환.
+    유형별 목록 엔드포인트를 순서대로 시도, bidNtceNo로 단건 필터링.
     성공하면 item dict, 실패하면 예외 발생.
     """
     no, ord_ = _parse_bid_no(bid_no)
     params = {
-        "serviceKey": api_key,
-        "numOfRows": "1",
+        "ServiceKey": api_key,  # 대문자 S
+        "numOfRows": "10",
         "pageNo": "1",
+        "inqryDiv": "2",        # 2 = 입찰공고번호로 조회 (1=등록일시, 3=변경일시)
         "bidNtceNo": no,
-        "bidNtceOrd": ord_,
-        "_type": "json",
+        "type": "json",
     }
 
     last_err = None
-    for endpoint in DETAIL_ENDPOINTS:
+    for endpoint in LIST_ENDPOINTS:
         try:
             resp = requests.get(endpoint, params=params, timeout=15)
             resp.raise_for_status()
@@ -67,16 +71,22 @@ def get_bid_detail(api_key: str, bid_no: str) -> dict:
 
             body = data.get("response", {}).get("body", {})
             total = body.get("totalCount", 0)
-            if not total or total == "0":
+            if not total or str(total) == "0":
                 continue
 
-            items = body.get("items", {})
+            items = body.get("items")
             if not items:
                 continue
 
-            item = items.get("item", [])
-            if isinstance(item, dict):
-                item = [item]
+            # JSON 응답: items 가 list 또는 {"item": [...]} 두 형태 모두 대응
+            if isinstance(items, list):
+                item = items
+            elif isinstance(items, dict):
+                item = items.get("item", [])
+                if isinstance(item, dict):
+                    item = [item]
+            else:
+                continue
 
             if item:
                 result = item[0]
@@ -91,31 +101,23 @@ def get_bid_detail(api_key: str, bid_no: str) -> dict:
     raise Exception(f"공고 조회 실패: {last_err or '데이터 없음'}")
 
 
-def get_file_list(api_key: str, bid_no: str, bid_ord: str) -> list:
-    """첨부파일 목록 반환. 실패하면 빈 리스트."""
-    params = {
-        "serviceKey": api_key,
-        "numOfRows": "20",
-        "pageNo": "1",
-        "bidNtceNo": bid_no,
-        "bidNtceOrd": bid_ord,
-        "_type": "json",
-    }
-    try:
-        resp = requests.get(FILE_ENDPOINT, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-        items = data.get("response", {}).get("body", {}).get("items", {})
-        if not items:
-            return []
-
-        files = items.get("item", [])
-        if isinstance(files, dict):
-            files = [files]
-        return files or []
-    except Exception:
-        return []
+def extract_pdf_urls(detail: dict) -> list:
+    """
+    API 응답 item에서 PDF 첨부파일 URL 목록 추출.
+    ntceSpecFileNm1~5 / ntceSpecDocUrl1~5 쌍을 검사해 PDF만 반환.
+    """
+    pdf_urls = []
+    for i in range(1, MAX_ATTACH + 1):
+        name = detail.get(f"ntceSpecFileNm{i}", "") or ""
+        url = detail.get(f"ntceSpecDocUrl{i}", "") or ""
+        if not url:
+            continue
+        # HWP 제외, PDF 또는 이름 미확인(일단 시도) 허용
+        if name.lower().endswith(".hwp") or name.lower().endswith(".hwpx"):
+            continue
+        if name.lower().endswith(".pdf") or not name:
+            pdf_urls.append(url)
+    return pdf_urls
 
 
 def download_pdf_text(url: str) -> str:
@@ -227,38 +229,12 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
         # 텍스트 수집: API 필드
         text_parts = [str(detail.get(f, "") or "") for f in TEXT_FIELDS]
 
-        # 텍스트 수집: 첨부 PDF
-        no = detail["_bid_no"]
-        ord_ = detail["_bid_ord"]
-        files = get_file_list(api_key, no, ord_)
-
-        for f in files:
-            # 파일 URL 필드명 여러 경우 대응
-            url = (
-                f.get("fileUrl")
-                or f.get("filePath")
-                or f.get("atchFileUrl")
-                or ""
-            )
-            name = (
-                f.get("fileNm")
-                or f.get("atchFileNm")
-                or f.get("orignlFileNm")
-                or ""
-            )
-
-            # HWP 제외, PDF만
-            if name.lower().endswith(".hwp"):
-                continue
-
-            if url and (
-                name.lower().endswith(".pdf")
-                or "pdf" in url.lower()
-            ):
-                pdf_text = download_pdf_text(url)
-                if pdf_text:
-                    text_parts.append(pdf_text)
-                    result["pdf_count"] += 1
+        # 텍스트 수집: 첨부 PDF (응답에 포함된 ntceSpecDocUrl 필드 사용)
+        for url in extract_pdf_urls(detail):
+            pdf_text = download_pdf_text(url)
+            if pdf_text:
+                text_parts.append(pdf_text)
+                result["pdf_count"] += 1
 
         combined = "\n".join(text_parts)
 
