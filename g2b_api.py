@@ -166,17 +166,42 @@ def calc_a_value(a_info: dict) -> float:
     return total
 
 
-def classify_qual_criteria(sucsfbid_mthd_nm: str) -> str:
-    """낙찰방법명에서 적격심사 기준 분류."""
-    if not sucsfbid_mthd_nm:
-        return "해당없음"
-    nm = sucsfbid_mthd_nm
-    if "행정안전부" in nm:
+def classify_qual_criteria(sucsfbid_mthd_nm: str, full_text: str = "") -> str:
+    """
+    적격심사 기준 분류.
+    sucsfbidMthdNm(낙찰방법명) 단독으로 판단하면 행정안전부 기준을 놓치는 경우가 있어
+    PDF 포함 전체 텍스트(full_text)까지 함께 검색한다.
+
+    행정안전부 기준 특징:
+      - PDF 본문에 "행정안전부 예규", "지방자치단체 입찰시 낙찰자 결정 기준" 등이 명시됨
+      - 낙찰방법명에는 그냥 "적격심사제-..." 만 들어있는 경우가 많음
+
+    조달청 기준 특징:
+      - 낙찰방법명에 "조달청"이 명시되는 경우가 많음
+      - PDF에도 "조달청 적격심사 세부기준" 등이 등장
+    """
+    combined = (sucsfbid_mthd_nm or "") + "\n" + (full_text or "")
+
+    # 행정안전부 기준 — PDF에 명시되는 표현들
+    haean_keywords = [
+        "행정안전부 예규",
+        "행정안전부 기준",
+        "지방자치단체 입찰시 낙찰자 결정",
+        "지방자치단체입찰시낙찰자결정",
+        "행정자치부 예규",          # 옛 명칭
+        "행정자치부 기준",
+    ]
+    if any(k in combined for k in haean_keywords):
         return "행정안전부 기준"
-    if "조달청" in nm:
+
+    # 조달청 기준
+    if "조달청" in combined:
         return "조달청 기준"
-    if "적격심사" in nm or "계약이행능력" in nm:
+
+    # 적격심사는 맞는데 기관 불명확
+    if "적격심사" in combined or "계약이행능력심사" in combined:
         return "기타 적격심사"
+
     return "해당없음"
 
 
@@ -278,9 +303,6 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
         result["bid_type"]    = bid_type
         result["presmpt_prce"] = _to_float(detail.get("presmptPrce"))
         result["lwlt_rate"]   = _to_float(detail.get("sucsfbidLwltRate"))
-        result["qual_criteria"] = classify_qual_criteria(
-            detail.get("sucsfbidMthdNm", "")
-        )
 
         # ② 기초금액 / 순공사원가
         bss = get_bssamt_info(api_key, no, bid_type)
@@ -292,7 +314,7 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
             a_info = get_a_value_info(api_key, no)
             result["a_value"] = calc_a_value(a_info)
 
-        # ④ 텍스트 수집 → 키워드 분류
+        # ④ 텍스트 수집 (API 필드 + PDF)
         text_parts = [str(detail.get(f, "") or "") for f in TEXT_FIELDS]
         for url in extract_pdf_urls(detail):
             pdf_text = download_pdf_text(url)
@@ -301,6 +323,13 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
                 result["pdf_count"] += 1
 
         combined = "\n".join(text_parts)
+
+        # ⑤ 적격심사 기준 — PDF 포함 전체 텍스트로 판단
+        result["qual_criteria"] = classify_qual_criteria(
+            detail.get("sucsfbidMthdNm", ""), combined
+        )
+
+        # ⑥ 특이 공고 키워드 분류
         tags = check_keywords(combined, config.get("keywords", []))
         result["special_tags"] = tags
         result["is_special"]   = bool(tags)
