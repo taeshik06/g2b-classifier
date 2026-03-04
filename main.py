@@ -123,28 +123,46 @@ class App(tk.Tk):
         self._progress = ttk.Progressbar(self, mode="indeterminate")
         self._progress.pack(fill=tk.X, padx=8, pady=(2, 4))
 
-        # ── 결과 표시 ────────────────────────────────────────
+        # ── 결과 표시 (Treeview 표) ──────────────────────────
         res_frame = ttk.LabelFrame(self, text=" 분류 결과 ", padding=8)
         res_frame.pack(fill=tk.BOTH, expand=True, **pad)
 
-        self._out = scrolledtext.ScrolledText(
-            res_frame,
-            font=("맑은 고딕", 10),
-            state=tk.DISABLED,
-            relief=tk.SOLID,
-            borderwidth=1,
-        )
-        self._out.pack(fill=tk.BOTH, expand=True)
+        # 컬럼 정의: (id, 헤더명, 너비, 정렬)
+        self._COLS = [
+            ("분류",       "분류",       54,  "center"),
+            ("공고번호",   "공고번호",   115, "center"),
+            ("공고명",     "공고명",     280, "w"),
+            ("공사위치",   "공사위치",   110, "w"),
+            ("주공종",     "주공종",     110, "w"),
+            ("기초금액",   "기초금액",   100, "e"),
+            ("추정가격",   "추정가격",   100, "e"),
+            ("낙찰하한율", "낙찰하한율",  72, "e"),
+            ("A값",        "A값",         95, "e"),
+            ("순공사원가", "순공사원가", 100, "e"),
+            ("적격심사",   "적격심사기준", 110, "w"),
+            ("특이사항",   "특이사항",   160, "w"),
+        ]
+        col_ids = [c[0] for c in self._COLS]
 
-        # 색상 태그
-        self._out.tag_config("h_special", foreground="#c0392b", font=("맑은 고딕", 11, "bold"))
-        self._out.tag_config("h_normal",  foreground="#1a5276", font=("맑은 고딕", 11, "bold"))
-        self._out.tag_config("h_error",   foreground="#7f8c8d", font=("맑은 고딕", 11, "bold"))
-        self._out.tag_config("item_s",    foreground="#922b21")
-        self._out.tag_config("item_n",    foreground="#1b2631")
-        self._out.tag_config("item_e",    foreground="#7f8c8d")
-        self._out.tag_config("tag",       foreground="#e74c3c", font=("맑은 고딕", 9))
-        self._out.tag_config("amount",    foreground="#1e8449")
+        self._tree = ttk.Treeview(
+            res_frame, columns=col_ids, show="headings", selectmode="browse"
+        )
+        for cid, hdr, w, anchor in self._COLS:
+            self._tree.heading(cid, text=hdr)
+            self._tree.column(cid, width=w, minwidth=40, anchor=anchor, stretch=False)
+
+        vsb = ttk.Scrollbar(res_frame, orient=tk.VERTICAL,   command=self._tree.yview)
+        hsb = ttk.Scrollbar(res_frame, orient=tk.HORIZONTAL, command=self._tree.xview)
+        self._tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        vsb.pack(side=tk.RIGHT,  fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self._tree.pack(fill=tk.BOTH, expand=True)
+
+        # 행 색상 태그
+        self._tree.tag_configure("special", foreground="#922b21", background="#fff0f0")
+        self._tree.tag_configure("normal",  foreground="#1b2631")
+        self._tree.tag_configure("error",   foreground="#7f8c8d", background="#f8f8f8")
 
     # ── 이벤트 핸들러 ──────────────────────────────────────────
 
@@ -160,9 +178,8 @@ class App(tk.Tk):
         messagebox.showinfo("저장 완료", "API 인증키가 저장되었습니다.")
 
     def _clear(self):
-        self._out.config(state=tk.NORMAL)
-        self._out.delete("1.0", tk.END)
-        self._out.config(state=tk.DISABLED)
+        for item in self._tree.get_children():
+            self._tree.delete(item)
         self._status_var.set("준비")
 
     def _run(self):
@@ -200,47 +217,8 @@ class App(tk.Tk):
 
     # ── 결과 렌더링 ─────────────────────────────────────────────
 
-    def _write(self, text: str, tag: str = ""):
-        self._out.config(state=tk.NORMAL)
-        if tag:
-            self._out.insert(tk.END, text, tag)
-        else:
-            self._out.insert(tk.END, text)
-        self._out.config(state=tk.DISABLED)
-        self._out.see(tk.END)
-
     def _fmt_won(self, val: float) -> str:
         return f"{val:,.0f}원" if val else "미확인"
-
-    def _write_bid_row(self, r: dict, color_tag: str):
-        """공고 1건 출력 (특이/일반 공통)."""
-        pdf_note = f"  (PDF {r['pdf_count']}건 분석)" if r["pdf_count"] else ""
-        tags_str = "  ".join(f"[{t}]" for t in r["special_tags"])
-
-        self._write(f"  {r['bid_no']}  [{r['bid_type']}]  {r['institution']}\n", color_tag)
-        self._write(f"  {r['name']}\n", color_tag)
-
-        # 금액 정보
-        self._write(
-            f"  기초금액: {self._fmt_won(r['bssamt'])}"
-            f"   추정가격: {self._fmt_won(r['presmpt_prce'])}"
-            f"   낙찰하한율: {r['lwlt_rate']}%\n",
-            "amount"
-        )
-        a_str = self._fmt_won(r['a_value']) if r['a_value'] else "미해당/미공개"
-        self._write(
-            f"  A값: {a_str}"
-            f"   순공사원가: {self._fmt_won(r['pure_const_cost'])}\n",
-            "amount"
-        )
-        self._write(
-            f"  적격심사 기준: {r['qual_criteria']}{pdf_note}\n",
-            "amount"
-        )
-
-        if tags_str:
-            self._write(f"  {tags_str}\n", "tag")
-        self._write("\n")
 
     def _show_results(self, results: list):
         self._progress.stop()
@@ -254,30 +232,50 @@ class App(tk.Tk):
             f"완료 — 특이 {len(specials)}건 / 일반 {len(normals)}건 / 오류 {len(errors)}건"
         )
 
-        # ── 특이 공고 ─────────────────────────────────────
-        self._write(f"■ 특이 공고 ({len(specials)}건)\n", "h_special")
-        self._write("─" * 60 + "\n")
-        if specials:
-            for r in specials:
-                self._write_bid_row(r, "item_s")
-        else:
-            self._write("  (없음)\n\n")
+        for r in specials:
+            a_str = self._fmt_won(r["a_value"]) if r["a_value"] else "미해당/미공개"
+            tags_str = "  ".join(f"[{t}]" for t in r["special_tags"])
+            self._tree.insert("", tk.END, values=(
+                "특이",
+                r["bid_no"],
+                r["name"],
+                r["cnstwk_loc"],
+                r["main_cnstty"],
+                self._fmt_won(r["bssamt"]),
+                self._fmt_won(r["presmpt_prce"]),
+                f"{r['lwlt_rate']}%" if r["lwlt_rate"] else "-",
+                a_str,
+                self._fmt_won(r["pure_const_cost"]),
+                r["qual_criteria"],
+                tags_str,
+            ), tags=("special",))
 
-        # ── 일반 공고 ─────────────────────────────────────
-        self._write(f"■ 일반 공고 ({len(normals)}건)\n", "h_normal")
-        self._write("─" * 60 + "\n")
-        if normals:
-            for r in normals:
-                self._write_bid_row(r, "item_n")
-        else:
-            self._write("  (없음)\n\n")
+        for r in normals:
+            a_str = self._fmt_won(r["a_value"]) if r["a_value"] else "미해당/미공개"
+            tags_str = "  ".join(f"[{t}]" for t in r["special_tags"])
+            self._tree.insert("", tk.END, values=(
+                "일반",
+                r["bid_no"],
+                r["name"],
+                r["cnstwk_loc"],
+                r["main_cnstty"],
+                self._fmt_won(r["bssamt"]),
+                self._fmt_won(r["presmpt_prce"]),
+                f"{r['lwlt_rate']}%" if r["lwlt_rate"] else "-",
+                a_str,
+                self._fmt_won(r["pure_const_cost"]),
+                r["qual_criteria"],
+                tags_str,
+            ), tags=("normal",))
 
-        # ── 오류 ──────────────────────────────────────────
-        if errors:
-            self._write(f"■ 오류 ({len(errors)}건)\n", "h_error")
-            self._write("─" * 60 + "\n")
-            for r in errors:
-                self._write(f"  {r['bid_no']}  →  {r['error']}\n", "item_e")
+        for r in errors:
+            self._tree.insert("", tk.END, values=(
+                "오류",
+                r["bid_no"],
+                r.get("name", ""),
+                "", "", "", "", "", "", "", "",
+                r["error"],
+            ), tags=("error",))
 
 
 if __name__ == "__main__":

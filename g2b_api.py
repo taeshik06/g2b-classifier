@@ -280,6 +280,8 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
         "name": "",
         "institution": "",
         "bid_type": "",
+        "cnstwk_loc": "",       # 공사위치 (cnstrtsiteRgnNm)
+        "main_cnstty": "",      # 주공종 (mainCnsttyNm)
         "presmpt_prce": 0.0,
         "bssamt": 0.0,
         "lwlt_rate": 0.0,
@@ -301,6 +303,8 @@ def classify_bid(api_key: str, bid_no: str, config: dict) -> dict:
         result["name"]        = detail.get("bidNtceNm", "")
         result["institution"] = detail.get("ntceInsttNm", "")
         result["bid_type"]    = bid_type
+        result["cnstwk_loc"]  = detail.get("cnstrtsiteRgnNm", "")
+        result["main_cnstty"] = detail.get("mainCnsttyNm", "")
         result["presmpt_prce"] = _to_float(detail.get("presmptPrce"))
         result["lwlt_rate"]   = _to_float(detail.get("sucsfbidLwltRate"))
 
